@@ -32,7 +32,6 @@ extern byte sanctum_cert_man[512];
 extern int sanctum_length_cert;
 extern int sanctum_length_cert_root;
 extern int sanctum_length_cert_man;
-extern int kernel_dimension;
 extern byte test[64];
 
 unsigned int sanctum_sm_size = 0x1ff000;
@@ -70,6 +69,7 @@ int main()
 
 	void *mem_addr = (void *)0xA0000000UL;
 	void *mem_addr_drk;
+	void *mem_addr_drk_len;
 	int dim_cert;
 
 	print_uart("Copying puf_selm_value...\r\n");
@@ -78,6 +78,7 @@ int main()
 	print_uart("Copying the dimension of the certificate...\r\n");
 	memcpy(&dim_cert, mem_addr, 4);
 	unsigned char certDRK[dim_cert];
+	mem_addr_drk_len = mem_addr;
 	mem_addr += 4;
 
 	print_uart("Copying the certificate...\r\n");
@@ -177,11 +178,12 @@ int main()
 	print_uart("\nKernel signature verification\r\n");
 	print_uart("\r\n-----------------------------------------------------------\r\n");
 
-	if (verify_hw(ms2xl_eddsa, pub_key_platform_provider, ((void *)DRAM_BASE) + sanctum_sm_size, sd_payload_size - sanctum_sm_size, sd_kernel_signature) == 0)
+	if (verify_hw(ms2xl_eddsa, pub_key_platform_provider, ((void *)DRAM_BASE) + sanctum_sm_size, sd_payload_size - sanctum_sm_size, sd_kernel_signature, 0) == 0)
 	{
 		print_uart("Error in HW kernel signature verification!\r\n");
 		goto verfication_error;
 	}
+
 
 	ed25519_create_keypair(sanctum_device_root_key_pub, sanctum_device_root_key_priv, out_puf_1);
 
@@ -191,8 +193,6 @@ int main()
 	sha3_final(sanctum_CDI, &hash_ctx);
 
 	unsigned char seed_for_ECA_keys[64];
-
-	memcpy(certDRK, mem_addr_drk, dim_cert);
 
 	sha3_init(&hash_ctx, 64);
 	sha3_update(&hash_ctx, sanctum_CDI, 64);
@@ -282,10 +282,12 @@ int main()
 
 	sanctum_length_cert = effe_len_cert_der;
 
-	kernel_dimension = sd_payload_size - sanctum_sm_size;
+	memcpy(&dim_cert, mem_addr_drk_len, 4);
 
+	memcpy(certDRK, mem_addr_drk, dim_cert);
+
+	memcpy(sanctum_cert_root, certDRK, sanctum_length_cert_root);
 	memcpy(sanctum_cert_sm, cert_real, effe_len_cert_der);
-	memcpy(sanctum_cert_root, certDRK, dim_cert);
 
 	memset((void *)sanctum_ECASM_priv, 0, sizeof(*sanctum_ECASM_priv));
 	memset((void *)sanctum_device_root_key_priv, 0, sizeof(*sanctum_device_root_key_priv));
@@ -302,7 +304,7 @@ int main()
 	// 	print_uart_byte(sanctum_cert_sm[i]);
 	// print_uart("\r\n-----------------------------------------------------------\r\n");
 
-	// print_uart("\r\nDRK certificate:\r\n");
+	// print_uart("\r\nDRK certificate:");
 	// print_uart_int(sanctum_length_cert_root);
 	// print_uart("\r\n");
 	// for (int i = 0; i < sanctum_length_cert_root; i++)
