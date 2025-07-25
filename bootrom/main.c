@@ -132,16 +132,16 @@ int main() {
 
   sanctum_length_cert_root = dim_cert;
 
-  MMIO_WINDOW ms2xl_puf_1;
+  MMIO_WINDOW ms2xl_puf_2;
   MMIO_WINDOW ms2xl_sha3_512;
   MMIO_WINDOW ms2xl_eddsa;
 
-  createMMIOWindow(&ms2xl_puf_1, MS2XL_BASEADDR_PUF_1, MS2XL_LENGTH);
+  createMMIOWindow(&ms2xl_puf_2, MS2XL_BASEADDR_PUF_2, MS2XL_LENGTH);
   createMMIOWindow(&ms2xl_sha3_512, MS2XL_BASEADDR_SHA3_512, MS2XL_LENGTH);
   createMMIOWindow(&ms2xl_eddsa, MS2XL_BASEADDR_EDDSA, MS2XL_LENGTH);
-  unsigned char out_puf_1[256 / 8];
+  unsigned char out_puf_2[256 / 8];
 
-  puf_as_puf(ms2xl_puf_1, 1, 256, 9, out_puf_1, challenge_mask_to_print,
+  puf_as_puf(ms2xl_puf_2, 1, 256, 9, out_puf_2, challenge_mask_to_print,
              challenge_mask_from_SD, help_data_to_print, help_data_from_SD);
 
   sha3_ctx_t hash_ctx;
@@ -196,10 +196,10 @@ int main() {
   }
 
   ed25519_create_keypair(sanctum_device_root_key_pub,
-                         sanctum_device_root_key_priv, out_puf_1);
+                         sanctum_device_root_key_priv, out_puf_2);
 
   sha3_init(&hash_ctx, 64);
-  sha3_update(&hash_ctx, out_puf_1, 32);
+  sha3_update(&hash_ctx, out_puf_2 32);
   sha3_update(&hash_ctx, sanctum_sm_hash, 64);
   sha3_final(sanctum_CDI, &hash_ctx);
 
@@ -261,7 +261,7 @@ int main() {
   mbedtls_x509write_crt_set_key_usage(&cert, MBEDTLS_X509_KU_DIGITAL_SIGNATURE |
                                                  MBEDTLS_X509_KU_KEY_CERT_SIGN);
   ret = mbedtls_x509write_crt_set_validity(&cert, "20230101000000",
-                                           "20250101000000");
+                                           "20260101000000");
   if (ret != 0) {
     goto verfication_error;
   }
@@ -276,7 +276,7 @@ int main() {
   int effe_len_cert_der;
 
   ret = mbedtls_x509write_crt_der_board(&cert, cert_der, 1024, NULL, NULL,
-                                        out_puf_1);
+                                        out_puf_2);
   if (ret != 0) {
     effe_len_cert_der = ret;
     print_uart("ECA cert dimension: ");
@@ -325,12 +325,37 @@ int main() {
   // print_uart("\r\n-----------------------------------------------------------\r\n");
 
   closeMMIOWindow(&ms2xl_eddsa);
-  closeMMIOWindow(&ms2xl_puf_1);
+  closeMMIOWindow(&ms2xl_puf_2);
   closeMMIOWindow(&ms2xl_sha3_512);
 
   print_uart("Bootloader operations finished, jump to SM level!\r\n");
   print_uart(
       "\r\n-----------------------------------------------------------\r\n");
+
+  // 1.  Compute NAPOT‑encoded address:
+  //      pmpaddr0 = (base >> 2) | ((size/2) - 1)
+  //      Low bits ‘1’ encode the 2ⁿ window.  pmpaddr fields ignore bottom 2
+  //      bits.
+  uint64_t napot = (PUF_ID_BASE >> 2) | ((PUF_ID_SIZE / 2) - 1);
+
+  // 2.  Write to pmpaddr0
+  write_csr(CSR_PMPADDR0, napot);
+
+  // 3.  Build pmpcfg0 entry byte for PMP0:
+  //     L=1 (lock), A=NAPOT (0b11), R/W/X=0
+  uint8_t cfg0 = PMP_L | PMP_A_NAPOT;
+
+  // 4.  Read the entire pmpcfg0 CSR
+  uint64_t orig = read_csr(CSR_PMPCFG0);
+
+  // 5. Clear only the lowest 8 bits (entry for PMP0)
+  orig &= ~0xFFULL;
+
+  // 6. Insert cfg0 into byte 0
+  orig |= (uint64_t)cfg0;
+
+  // 7. Write back updated pmpcfg0
+  write_csr(CSR_PMPCFG0, orig);
 
   if (res == 0) {
     // jump to the address
